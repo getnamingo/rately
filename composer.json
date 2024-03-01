@@ -1,0 +1,21 @@
+{
+    "name": "namingo/rately",
+    "description": "A simple rate limiter using Swoole Tables.",
+    "type": "library",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Taras Kondratyuk",
+            "email": "help@namingo.org"
+        }
+    ],
+    "autoload": {
+        "psr-4": {
+            "Namingo\\Rately\\": "src/"
+        }
+    },
+    "require": {
+        "php": ">=8.2",
+        "ext-swoole": "*"
+    }
+}
