@@ -16,6 +16,10 @@
     },
     "require": {
         "php": ">=8.2",
-        "ext-swoole": "*"
+        "ext-swoole": "*",
+        "psr/http-message": "^2.0"
+    },
+    "require-dev": {
+        "swoole/ide-helper": "~5.0.0"
     }
 }
