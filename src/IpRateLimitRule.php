@@ -14,7 +14,8 @@ final class IpRateLimitRule implements RateLimitRuleInterface
     private const SERVICE_NAME = 'ip';
 
     public function __construct(
-        private readonly int $limit
+        private readonly int $limit,
+        private readonly int $period,
     ) {
     }
 
@@ -26,5 +27,10 @@ final class IpRateLimitRule implements RateLimitRuleInterface
     public function getLimit(): int
     {
         return $this->limit;
+    }
+
+    public function getPeriod(): int
+    {
+        return $this->period;
     }
 }

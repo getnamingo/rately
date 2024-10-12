@@ -25,14 +25,14 @@ class Rately
         $this->table->destroy();
     }
 
-    public function isRateLimited(string $identity, int $period): bool
+    public function isRateLimited(string $identity): bool
     {
         $key = $this->rateLimitRule->getServiceName() . ":" . $identity;
         $now = time();
 
         $data = $this->table->get($key);
 
-        if ($data === false || ($data['timestamp'] + $period) <= $now) {
+        if ($data === false || ($data['timestamp'] + $this->rateLimitRule->getPeriod()) <= $now) {
             $this->table->set($key, ['count' => 0, 'timestamp' => $now]);
             return false;
         }

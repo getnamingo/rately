@@ -11,4 +11,5 @@ interface RateLimitRuleInterface
 {
     public function getServiceName(): string;
     public function getLimit(): int;
+    public function getPeriod(): int;
 }
