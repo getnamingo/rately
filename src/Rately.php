@@ -1,8 +1,8 @@
 <?php
 
-namespace Namingo\Rately;
-
 declare(strict_types=1);
+
+namespace Namingo\Rately;
 
 use Namingo\Rately\Internal\RateLimitRuleInterface;
 use Swoole\Table;
@@ -37,7 +37,7 @@ class Rately
             return false;
         }
 
-        return $data['count'] < $this->rateLimitRule->getLimit();
+        return $data['count'] > $this->rateLimitRule->getLimit();
     }
 
     public function increment(string $identity): void
