@@ -2,41 +2,131 @@
 
 namespace Namingo\Rately;
 
+use InvalidArgumentException;
+use RuntimeException;
+use Swoole\Lock;
 use Swoole\Table;
 
 class Rately
 {
-    private $table;
+    private Table $table;
+    private Lock $lock;
 
-    public function __construct()
+    /**
+     * Create this instance before starting Swoole workers, and share it with them.
+     * An injected table must have an integer 'count' column and be created already.
+     */
+    public function __construct(int $size = 1024, ?Table $table = null)
     {
-        // Initialize the Swoole Table
-        $this->table = new Table(1024);
-        $this->table->column('count', Table::TYPE_INT); // Counter for requests
-        $this->table->column('timestamp', Table::TYPE_INT); // Last reset timestamp
-        $this->table->create();
+        if ($size < 1) {
+            throw new InvalidArgumentException('Table size must be positive.');
+        }
+
+        $this->lock = new Lock(SWOOLE_MUTEX);
+
+        if ($table !== null) {
+            $this->table = $table;
+            return;
+        }
+
+        $this->table = new Table($size);
+        if (!$this->table->column('count', Table::TYPE_INT, 8)
+            || !$this->table->create()) {
+            throw new RuntimeException('Unable to create Rately Swoole table.');
+        }
     }
 
+    /**
+     * Returns true after the configured number of requests in the current
+     * Unix-clock-aligned fixed window. Denied requests do not consume quota.
+     */
     public function isRateLimited(string $serviceKey, string $identifier, int $limit, int $period): bool
     {
-        $key = "{$serviceKey}:{$identifier}";
-        $now = time();
+        if ($limit < 1 || $period < 1) {
+            throw new InvalidArgumentException('Rate limit and period must be positive.');
+        }
 
-        // Attempt to get the current count and timestamp
-        $data = $this->table->get($key);
-        if ($data === false || ($data['timestamp'] + $period) <= $now) {
-            // If the key does not exist or the period has expired, reset the count and timestamp
-            $this->table->set($key, ['count' => 1, 'timestamp' => $now]);
-            return false; // Not rate limited
-        } else {
-            // If within the period, increment the count
-            if ($data['count'] < $limit) {
-                // Update the count atomically
-                $this->table->incr($key, 'count');
-                return false; // Not rate limited
-            } else {
-                return true; // Rate limited
+        $window = intdiv(time(), $period);
+        // Length-prefixed inputs avoid ambiguous service/identifier combinations.
+        // Keep keys within Swoole's 63-byte limit even for large periods.
+        $hash = substr(hash('sha256', strlen($serviceKey) . ':' . $serviceKey . ':' . $identifier), 0, 32);
+        $key = "r:{$period}:{$window}:{$hash}";
+
+        // The mutex protects first-row creation as well as the limit check.
+        // Table::incr() is atomic for existing rows, but is not an atomic
+        // insert-if-absent operation.
+        $this->lock->lock();
+        try {
+            $row = $this->table->get($key);
+            if ($row === false) {
+                if (!$this->insertCounter($key)) {
+                    $this->cleanupUnlocked();
+                    if (!$this->insertCounter($key)) {
+                        throw new RuntimeException('Rately table is full; increase its capacity.');
+                    }
+                }
+                return false;
+            }
+
+            if ($row['count'] >= $limit) {
+                return true;
+            }
+
+            if ($this->table->incr($key, 'count') === false) {
+                throw new RuntimeException('Unable to increment Rately counter.');
+            }
+            return false;
+        } finally {
+            $this->lock->unlock();
+        }
+    }
+
+    /**
+     * Swoole emits E_WARNING when a table cannot allocate a row. Some hosts
+     * promote warnings to exceptions; intercept only warnings from this one
+     * insertion so the normal false result can trigger cleanup and retry.
+     */
+    private function insertCounter(string $key): bool
+    {
+        set_error_handler(static function (int $severity): bool {
+            return $severity === E_WARNING;
+        }, E_WARNING);
+        try {
+            return $this->table->set($key, ['count' => 1]);
+        } finally {
+            restore_error_handler();
+        }
+    }
+
+    /** Remove expired window entries. Call from one worker on a timer if desired. */
+    public function cleanup(): int
+    {
+        $this->lock->lock();
+        try {
+            return $this->cleanupUnlocked();
+        } finally {
+            $this->lock->unlock();
+        }
+    }
+
+    private function cleanupUnlocked(): int
+    {
+        $now = time();
+        $removed = 0;
+        foreach ($this->table as $key => $_row) {
+            if (!str_starts_with((string) $key, 'r:')) {
+                continue;
+            }
+            $parts = explode(':', (string) $key, 4);
+            if (count($parts) !== 4 || !ctype_digit($parts[1]) || !ctype_digit($parts[2])) {
+                continue;
+            }
+            $period = (int) $parts[1];
+            if ($period > 0 && intdiv($now, $period) > (int) $parts[2]
+                && $this->table->del((string) $key)) {
+                ++$removed;
             }
         }
+        return $removed;
     }
 }
