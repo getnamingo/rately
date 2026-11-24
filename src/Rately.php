@@ -59,9 +59,9 @@ class Rately
         try {
             $row = $this->table->get($key);
             if ($row === false) {
-                if (!$this->table->set($key, ['count' => 1])) {
+                if (!$this->insertCounter($key)) {
                     $this->cleanupUnlocked();
-                    if (!$this->table->set($key, ['count' => 1])) {
+                    if (!$this->insertCounter($key)) {
                         throw new RuntimeException('Rately table is full; increase its capacity.');
                     }
                 }
@@ -78,6 +78,23 @@ class Rately
             return false;
         } finally {
             $this->lock->unlock();
+        }
+    }
+
+    /**
+     * Swoole emits E_WARNING when a table cannot allocate a row. Some hosts
+     * promote warnings to exceptions; intercept only warnings from this one
+     * insertion so the normal false result can trigger cleanup and retry.
+     */
+    private function insertCounter(string $key): bool
+    {
+        set_error_handler(static function (int $severity): bool {
+            return $severity === E_WARNING;
+        }, E_WARNING);
+        try {
+            return $this->table->set($key, ['count' => 1]);
+        } finally {
+            restore_error_handler();
         }
     }
 
