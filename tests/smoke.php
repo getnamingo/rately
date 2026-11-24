@@ -31,5 +31,36 @@ try {
 } catch (InvalidArgumentException $expected) {
 }
 
+// Saturate a separate table with expired window rows. This exercises the
+// allocation warning -> automatic cleanup -> retry path under an application
+// error handler that promotes warnings to exceptions.
+$table = new \Swoole\Table(64);
+$table->column('count', \Swoole\Table::TYPE_INT, 8);
+check($table->create(), 'test table should be created');
+$expiredWindow = intdiv(time(), 60) - 2;
+$filled = 0;
+set_error_handler(static function (): bool { return true; }, E_WARNING);
+try {
+    for ($i = 0; $i < 512; ++$i) {
+        if (!$table->set("r:60:{$expiredWindow}:" . str_pad((string) $i, 32, '0', STR_PAD_LEFT), ['count' => 1])) {
+            break;
+        }
+        ++$filled;
+    }
+} finally {
+    restore_error_handler();
+}
+check($filled > 0 && $filled < 512, 'test table should be saturated');
+$recovering = new Rately(table: $table);
+set_error_handler(static function (int $severity, string $message): never {
+    throw new ErrorException($message, 0, $severity);
+});
+try {
+    check(!$recovering->isRateLimited('recovery', 'client', 1, 60), 'expired rows should be reclaimed on allocation failure');
+} finally {
+    restore_error_handler();
+}
+check($recovering->cleanup() >= 0, 'cleanup remains usable after warning recovery');
+
 check($rately->cleanup() >= 0, 'cleanup returns count');
 echo "Rately smoke OK\n";
